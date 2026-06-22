@@ -1,0 +1,16 @@
+# Настройки доступа к Freedom Broker
+[credentials]
+fb_email = "" #email зарегестрированный на фридом финансе
+fb_password = "" #пароль зарегестрированный на фридом фирнансе
+
+# Здесь же можно хранить и другие настройки робота
+[strategy]
+tickers = ['AIRA.KZ', 'ASBN.KZ', 'HSBK.KZ', 'KSPI.KZ']
+start_date = '01.01.2026'
+interval_minutes = 5
+interval_seconds = 300
+min_rows_required = 200
+
+[telegram]
+bot_token = '' #токен для Вашего телеграм бота
+chat_id = "" #Ваш чат id
