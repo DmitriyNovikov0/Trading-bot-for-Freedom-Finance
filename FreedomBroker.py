@@ -2,17 +2,16 @@
 import requests
 import json
 import pandas as pd
-from datetime import datetime, timedelta, datetime
+from datetime import datetime, timedelta
 
 class FreedomBroker:
     __BROKER_URL = 'https://tradernet.com/api/'
-    __auth_data = {}
     __UTC = "+04:00" # для перевода времени, сервер по ходу в Астане
 
     def __init__(self, user_name, password):
         self.login = False
         self.answer_text = ''
-        # self.__auth_data = {}
+        self.__auth_data = {}
         self.__user_data = {} #может нужно будет потом
         self.__secret_session_open = False #открыта ли сессия для торговых приказов
 
@@ -45,50 +44,35 @@ class FreedomBroker:
            2 параметр - стартовая дата в формате ДД.ММ.ГГГГ,
           3 параметр - конечная дата в формате ДД.ММ.ГГГГ,
           4 параметр - интервал в минутах[1, 5, 15, 60, 1440]
-          5 параметр - количество дней от текущей даты(если нужно), если указываем количество дней даты не вводятся"""
+          5 параметр - количество свечей"""
         if not self.login:
             self.answer_text = 'Ошибка: Нет активной сессии (вы не авторизованы)'
             return None
 
         now = datetime.now()
         if limit>0:
-            # date_list = [now - timedelta(minutes=interval * i) for i in range(200)]
-            # date_from = date_list[-1] if date_list else now
-            tmp_interval = 0
-            if interval == 1:
-                tmp_interval = interval * 480
-            elif interval == 5:
-                tmp_interval = interval * 96
-            elif interval == 15:
-                tmp_interval = interval * 32
-            elif interval == 60:
-                tmp_interval = interval * 8
-            elif interval == 1440:
-                tmp_interval = interval * 2
+            # Словарь коэффициентов для минутного эквивалента свечей с запасом на выходные дни
+            interval_multipliers = {1: 480, 5: 96, 15: 32, 60: 8, 1440: 2}
+            tmp_interval = interval_multipliers.get(interval, interval * 2)
 
-            date_tmp = now - timedelta(minutes = tmp_interval * limit)
-            formatted_date_from = date_tmp.strftime("%d.%m.%Y")
-            formatted_date_to = now.strftime("%d.%m.%Y")
-
-            #ПРОВЕРИТЬ ЭТОТ КОД
-            # days_needed = max(2, int((interval * limit) / 1440) * 3)
-            # date_from_dt = now - timedelta(days=days_needed)
-            # date_to_dt = now
+            # Умножаем на 3, чтобы гарантированно перекрыть выходные дни (когда биржа закрыта)
+            date_from = now - timedelta(days=(int(limit / tmp_interval) * 3) + 1)
+            date_to = now
 
         else:
             try:
-                formatted_date_from = datetime.strptime(date_from, "%d.%m.%Y")
                 formatted_date_to = datetime.strptime(date_to, "%d.%m.%Y")
                 # Чтобы захватить весь конечный день, ставим время на конец суток
-                formatted_date_to = formatted_date_to.replace(hour=23, minute=59, second=59)
+                date_to = formatted_date_to.replace(hour=23, minute=59, second=59)
+                date_from = datetime.strptime(date_from, "%d.%m.%Y")
             except ValueError:
                 self.answer_text = 'Ошибка: Неверный формат дат. Используйте ДД.ММ.ГГГГ'
                 return None
 
 
         # Форматируем даты строго в ISO формат, который ожидает API Tradernet (YYYY-MM-DD)
-        # formatted_date_from = str(datetime.strptime(date_from, "%d.%m.%Y"))
-        # formatted_date_to = str(datetime.strptime(date_to, "%d.%m.%Y"))
+        formatted_date_from = str(datetime.strftime(date_from, "%d.%m.%Y"))
+        formatted_date_to = str(datetime.strftime(date_to, "%d.%m.%Y"))
         r_dict = {
             'cmd': 'getHloc',
             # 'SID' : aut_data['SID'],
@@ -97,9 +81,9 @@ class FreedomBroker:
                 "id": ticker_,  # "FB.US",
                 "count": -1,
                 "timeframe": interval, #  интервал в минутах[ 1, 5, 15, 60, 1440 ]
-                "date_from": str(formatted_date_from),
+                "date_from": formatted_date_from,
                 #все работает, не работает на маленьких выборках....
-                "date_to": str(formatted_date_to),
+                "date_to": formatted_date_to,
                 "intervalMode": 'ClosedRay'
             }
         }
@@ -140,6 +124,8 @@ class FreedomBroker:
             if limit > 0:
                 return df.tail(limit).reset_index(drop=True)
 
+            if interval==1440:
+                df = df[df['date'] <= formatted_date_to]
             return df
 
         except Exception as e:
@@ -150,44 +136,72 @@ class FreedomBroker:
         pass
 
     def get_user_stock_list(self, list_name='autoTrading'):
-        """
-        list_name - название списка из которого будем дергать тикеты,
-        возвращает список акций пользователя в виде списка
-        :return:
-
+        """Возвращает список акций пользователя в виде плоского списка строк.
+        list_name (str) - название списка из личного кабинета Tradernet.
+                          Если передать 'all', вернутся тикеры из всех списков.
         """
         if not self.login:
+            self.answer_text = 'Ошибка: Нет активной сессии (вы не авторизованы)'
             return None
+
         r_dict = {
             'cmd': 'getUserStockLists',
-            'SID': self.__user_data['SID'],
+            'SID': self.__auth_data.get('SID'),  # Безопасное получение SID
         }
 
-        r = requests.get(self.__BROKER_URL, {'q': json.dumps(r_dict, separators=(',', ':'))})
-        if r.status_code != 200:
-            self.answer_text = f'Ошибка подключения  к сайту, ошибка: {r.text}'
-            return None
-        _tickers = []
-        t = json.loads(r.text)
-        for tickers in t['userStockLists']:
+        try:
+            # Обязательно добавляем params= и timeout=15
+            r = requests.get(
+                self.__BROKER_URL,
+                params={'q': json.dumps(r_dict, separators=(',', ':'))},
+                timeout=15
+            )
+
+            if r.status_code != 200:
+                self.answer_text = f'Ошибка подключения к сайту, статус: {r.status_code}'
+                return None
+
+            t = r.json()  # Используем встроенный метод requests вместо json.loads
+
+            # Защита: если ключа нет, вернется пустой список, цикл не упадет
+            lists_data = t.get('userStockLists', [])
+
+            _tickers = []
+            for item in lists_data:
+                # Извлекаем список тикеров, если ключа нет — берем пустой список
+                current_tickers = item.get('tickers', [])
+
+                if list_name == 'all':
+                    # .extend() добавляет элементы внутрь _tickers, сохраняя список плоским
+                    _tickers.extend(current_tickers)
+                else:
+                    if item.get('name') == list_name:
+                        _tickers.extend(current_tickers)
+                        # Если нашли конкретный список, можно выйти из цикла раньше
+                        break
+
+                        # Очищаем от возможных дубликатов (если один тикер лежит в разных списках при 'all')
             if list_name == 'all':
-                _tickers.append(tickers['tickers'])
-            else:
-                if tickers['name'] == list_name:
-                    _tickers += tickers['tickers']
+                _tickers = list(set(_tickers))
 
-        return _tickers
+            return _tickers
 
-    def get_top_tickets(self, type = "stocks", exchange="kazakhstan", gainers=1, limit=20):
-        """возвращаем список самых торгуемых бумаг на определенной бирже
-        type(str) - stocks(Акции), bonds(Облигации), futures(Фьючерсы), funds(Фонды), indexes(Индексы)
-        exchange(str) - kazakhstan(Казахстан), europe(Европа), usa(Америка), ukraine(Украина), currencies(Валюта)
+        except Exception as e:
+            self.answer_text = f'Ошибка при получении списков акций: {str(e)}'
+            return None
+
+    def get_top_tickers(self, type="stocks", exchange="kazakhstan", gainers=1, limit=20):
+        """Возвращает список самых торгуемых бумаг на определенной бирже.
+
+        type(str) - stocks, bonds, futures, funds, indexes
+        exchange(str) - kazakhstan, europe, usa, ukraine, currencies
         gainers(int) - 1(Топ быстрорастущих), 0(Топ по объему торгов)
         limit(int) - количество выводимых
-
         """
         if not self.login:
+            self.answer_text = 'Ошибка: Нет активной сессии (вы не авторизованы)'
             return None
+
         r_dict = {
             'cmd': 'getTopSecurities',
             'params': {
@@ -198,49 +212,78 @@ class FreedomBroker:
             }
         }
 
-        r = requests.get(self.__BROKER_URL, {'q': json.dumps(r_dict, separators=(',', ':'))})
-        if r.status_code != 200:
-            self.answer_text = f'Ошибка подключения  к сайту, ошибка: {r.text}'
+        try:
+            # Исправлено: явно указываем params= и добавляем sid для прохождения авторизации
+            params = {
+                'q': json.dumps(r_dict, separators=(',', ':')),
+                'sid': self.__auth_data.get('SID')  # Передаем токен сессии
+            }
+
+            # Обязательно добавляем timeout=15, чтобы скрипт не зависал вечно
+            r = requests.get(self.__BROKER_URL, params=params, timeout=15)
+
+            if r.status_code != 200:
+                self.answer_text = f'Ошибка подключения к сайту, статус: {r.status_code}'
+                return None
+
+            t = r.json()  # Используем встроенный метод парсинга json
+
+            # Безопасное извлечение ключа 'tickers'. Если его нет, вернет пустой список вместо падения
+            return t.get('tickers', [])
+
+        except Exception as e:
+            self.answer_text = f'Ошибка при получении топ-тикеров: {str(e)}'
             return None
-        _tickers = [] # честно не помню нахрена объявлял....
-        t = json.loads(r.text)
 
-        return t['tickers']
+    def get_balance(self, curr='KZT'):
+        """Возвращает сумму на счету по указанной валюте.
 
-    def get_ballance(self, curr='KZT'):
-        """возвращаем сумму на счету
-        curr(str) - сумму какой валюты вернуть ('KZT', 'RUR', 'USD')
-
+        curr (str) - код валюты ('KZT', 'USD', 'EUR', 'RUB' и т.д.)
+        Возвращает float (сумму), 0 если валюта не найдена, или None при ошибке сети/API.
         """
         if not self.login:
+            self.answer_text = 'Ошибка: Нет active сессии (вы не авторизованы)'
             return None
+
         r_dict = {
             'cmd': 'getPositionJson',
-            'SID': self.__user_data.get('SID'),
-            'params': {
-            }
+            'SID': self.__auth_data.get('SID'),
+            'params': {}  # Внутри params для этой команды ничего не требуется
         }
 
         try:
-            r = requests.get(self.__BROKER_URL, params={'q': json.dumps(r_dict, separators=(',', ':'))}, timeout=10)
+            # Передаем сессию 'sid' на уровне параметров запроса, как требует Tradernet
+            params = {
+                'q': json.dumps(r_dict, separators=(',', ':')),
+            }
+
+            r = requests.get(self.__BROKER_URL, params=params, timeout=10)
+
             if r.status_code != 200:
-                self.answer_text = f'Ошибка подключения к сайту, ошибка: {r.text}'
-                return 0
+                self.answer_text = f'Ошибка подключения к сайту, статус: {r.status_code}'
+                return None  # Возвращаем None, чтобы сигнализировать об ошибке сети
 
             t = r.json()
-            # Безопасный переход по ключам. Если ключей нет — вернет пустой список
-            tmp = t.get('result', {}).get('ps', {}).get('acc', [])
 
-            summ = 0
-            for item in tmp:
+            # Безопасный переход по ключам ответа брокера
+            acc_list = t.get('result', {}).get('ps', {}).get('acc', [])
+
+            # Если список счетов пустой, возможно, у брокера технические работы
+            if not acc_list and 'error' in t.get('result', {}):
+                self.answer_text = f"Ошибка API: {t['result'].get('error')}"
+                return None
+
+            for item in acc_list:
                 if item.get('curr') == curr:
-                    summ = item.get('s', 0)
-                    break  # Валюта найдена, можно выходить из цикла
+                    # Приводим к float, так как баланс — это дробное число
+                    return float(item.get('s', 0))
 
-            return summ
+            # Если мы дошли сюда, значит запрос успешный, но конкретно этой валюты на счету нет
+            return 0.0
+
         except Exception as e:
             self.answer_text = f'Ошибка при получении баланса: {str(e)}'
-            return 0
+            return None  # Возвращаем None при любых непредвиденных исключениях
 
     def get_stock_quote(self, tickers):
         """1 параметр - список идентификаторов ценных бумаг - ['KZTO.KZ', 'KEGC.KZ'] (списком!!!!)
@@ -264,7 +307,6 @@ class FreedomBroker:
 
         dict_tickers = {}
         try:
-            # Заменили хардкод строки на переменную self.__BROKER_URL
             r = requests.post(self.__BROKER_URL, data={'q': json.dumps(r_dict, separators=(',', ':'))}, timeout=10)
             if r.status_code != 200:
                 self.answer_text = f'Ошибка подключения к сайту, ошибка: {r.text}'
