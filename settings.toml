@@ -1,7 +1,7 @@
 # Настройки доступа к Freedom Broker
 [credentials]
-fb_email = "" #email зарегестрированный на фридом финансе
-fb_password = "" #пароль зарегестрированный на фридом фирнансе
+public_key = "" #ключи генерируются на сайте https://freedom24.com/tradernet-api/auth-api
+private_key = ""
 
 # Здесь же можно хранить и другие настройки робота
 [strategy]

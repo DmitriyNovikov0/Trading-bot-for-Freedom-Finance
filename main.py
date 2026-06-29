@@ -37,8 +37,8 @@ try:
         config = tomllib.load(f)
 
     # Извлекаем данные из секции [credentials]
-    FB_EMAIL = config["credentials"]["fb_email"]
-    FB_PASSWORD = config["credentials"]["fb_password"]
+    PUBLIC_KEY = config["credentials"]["public_key"]
+    PRIVATE_KEY = config["credentials"]["private_key"]
     # забираем настройки стратегии
     TICKERS = config["strategy"].get("tickers", ['AIRA.KZ', 'ASBN.KZ', 'HSBK.KZ', 'KSPI.KZ'])
     _START_DATE = config["strategy"].get("start_date", '01.01.2026')
@@ -201,7 +201,7 @@ def my_target_function():
 
 
 if __name__ == "__main__":
-    broker = fb.FreedomBroker(FB_EMAIL, FB_PASSWORD)
+    broker = fb.FreedomBroker(PUBLIC_KEY, PRIVATE_KEY)
     strategy = ts.TechnicalStrategy()
 
     # Загружаем историю один раз при старте
